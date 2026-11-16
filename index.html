@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MOBA – Map Layout</title>
+<style>
+  :root { --bg:#0b1016; --ink:#d9e4dc; --muted:#7d8f86; --accent:#5fd0a0; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:var(--bg); color:var(--ink);
+    font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif; -webkit-user-select:none; user-select:none; }
+  #game { position:fixed; inset:0; width:100%; height:100%; }
+  #game canvas { display:block; width:100%; height:100%; }
+  #loading { position:fixed; inset:0; z-index:10; display:flex; flex-direction:column; align-items:center;
+    justify-content:center; gap:18px; background:radial-gradient(ellipse at center,#121c24 0%,var(--bg) 70%);
+    transition:opacity .6s ease, visibility .6s ease; }
+  #loading.hidden { opacity:0; visibility:hidden; pointer-events:none; }
+  #loading .title { font-size:1.1rem; letter-spacing:.35em; text-indent:.35em; color:var(--ink); }
+  #loading .bar { width:160px; height:2px; background:rgba(255,255,255,.08); overflow:hidden; border-radius:2px; }
+  #loading .bar::after { content:""; display:block; width:40%; height:100%; background:var(--accent);
+    border-radius:2px; animation:slide 1.1s ease-in-out infinite; }
+  #loading .status { font-size:.75rem; color:var(--muted); }
+  #loading.error .bar { display:none; }
+  #loading.error .status { color:#e08a8a; max-width:320px; text-align:center; line-height:1.5; }
+  @keyframes slide { 0%{transform:translateX(-100%)} 100%{transform:translateX(260%)} }
+  @media (prefers-reduced-motion:reduce) { #loading .bar::after{animation:none;width:100%} #loading{transition:none} }
+</style>
+</head>
+<body>
+
+<div id="game"></div>
+
+<div id="loading" role="status" aria-live="polite">
+  <div class="title">LOADING BATTLEFIELD</div>
+  <div class="bar"></div>
+  <div class="status" id="loading-status">Preparing the arena…</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var loadingEl = document.getElementById("loading");
+  var statusEl = document.getElementById("loading-status");
+  var container = document.getElementById("game");
+
+  function fail(message) { loadingEl.classList.add("error"); statusEl.textContent = message; }
+
+  if (typeof THREE === "undefined") { fail("Three.js could not be loaded. Check your connection and refresh."); return; }
+
+  try {
+    var coarse = window.matchMedia && window.matchMedia("(pointer:coarse)").matches;
+
+    /* ---------- Renderer ---------- */
+    var renderer = new THREE.WebGLRenderer({ antialias: !coarse });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    container.appendChild(renderer.domElement);
+
+    /* ---------- Scene, sky, fog ---------- */
+    var FOG_COLOR = 0x7d8aa6;
+    var scene = new THREE.Scene();
+    scene.background = new THREE.Color(FOG_COLOR);
+    scene.fog = new THREE.Fog(FOG_COLOR, 110, 250);
+
+    var sky = new THREE.Mesh(
+      new THREE.SphereGeometry(400, 24, 12),
+      new THREE.ShaderMaterial({
+        side: THREE.BackSide, depthWrite: false, fog: false,
+        uniforms: { top: { value: new THREE.Color(0x172247) }, mid: { value: new THREE.Color(0x4a5a8c) }, hor: { value: new THREE.Color(FOG_COLOR) } },
+        vertexShader: "varying vec3 vP; void main(){ vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }",
+        fragmentShader: "uniform vec3 top,mid,hor; varying vec3 vP; void main(){ float h=max(normalize(vP).y,0.0);" +
+          "vec3 c=mix(hor,mid,smoothstep(0.0,0.25,h)); c=mix(c,top,smoothstep(0.2,0.8,h)); gl_FragColor=vec4(c,1.0); }"
+      })
+    );
+    scene.add(sky);
+
+    /* ---------- Camera (isometric-style, unchanged) ---------- */
+    var camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 600);
+    var camTarget = new THREE.Vector3(0, 0, 0);
+    var camOffset = new THREE.Vector3(1, 1.15, 1).normalize().multiplyScalar(75);
+    function fitCamera() {
+      var a = camera.aspect, k = a < 1.2 ? Math.min(1.8, Math.sqrt(1.2 / a)) : 1; // pull back on narrow screens
+      camera.position.copy(camTarget).add(camOffset.clone().multiplyScalar(k));
+      camera.lookAt(camTarget);
+    }
+    fitCamera();
+
+    /* ---------- Lighting ---------- */
+    scene.add(new THREE.AmbientLight(0xa8b4d4, 0.4));
+    scene.add(new THREE.HemisphereLight(0x9fb8ff, 0x3a5a30, 0.4));
+    var sun = new THREE.DirectionalLight(0xffe2b8, 1.05);
+    sun.position.set(-45, 70, 30);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(coarse ? 1024 : 2048, coarse ? 1024 : 2048);
+    sun.shadow.camera.left = -75; sun.shadow.camera.right = 75;
+    sun.shadow.camera.top = 75; sun.shadow.camera.bottom = -75;
+    sun.shadow.camera.near = 1; sun.shadow.camera.far = 220;
+    sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.4;
+    scene.add(sun);
+
+    /* ---------- Helpers ---------- */
+    var seed = 1337;
+    function rnd() { seed |= 0; seed = seed + 0x6D2B79F5 | 0; var t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }
+    function hash(x, y) { var h = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return h - Math.floor(h); }
+    function vnoise(x, y) { var ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+      fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+      var a = hash(ix, iy), b = hash(ix + 1, iy), c = hash(ix, iy + 1), d = hash(ix + 1, iy + 1);
+      return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy; }
+    function fbm(x, y) { return vnoise(x, y) * 0.55 + vnoise(x * 2.1, y * 2.1) * 0.3 + vnoise(x * 4.3, y * 4.3) * 0.15; }
+    function sstep(a, b, x) { var t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
+
+    /* ---------- Map layout (symmetric: lanes, jungle, bases) ---------- */
+    var A = 56, PLAZA = 10, BASE_R = 12;
+    var BASES = [[0, 44], [0, -44]]; // [0] blue (+z), [1] red (-z)
+    var SEGS = [], CLEARINGS = [], QUADS = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+    function addPath(pts, w, main) { for (var j = 0; j < pts.length - 1; j++) SEGS.push([pts[j][0], pts[j][1], pts[j + 1][0], pts[j + 1][1], w, main]); }
+    addPath([[0, 44], [0, -44]], 4, 1);                                              // mid lane
+    addPath([[0, 44], [-32, 38], [-39, 0], [-32, -38], [0, -44]], 3.2, 1);           // top lane
+    addPath([[0, 44], [32, 38], [39, 0], [32, -38], [0, -44]], 3.2, 1);              // bottom lane
+    QUADS.forEach(function (q) {
+      function P(a, b) { return [a * q[0], b * q[1]]; }
+      CLEARINGS.push([21 * q[0], 25 * q[1], 5], [26 * q[0], 8 * q[1], 4]);           // future monster camps
+      addPath([P(0, 26), P(21, 25)], 2.2); addPath([P(21, 25), P(34, 36)], 2.2);     // jungle paths / lane connectors
+      addPath([P(21, 25), P(26, 8)], 1.8); addPath([P(26, 8), P(38, 5)], 2.2);
+      addPath([P(26, 8), P(12, 5), P(0, 5)], 1.8);
+    });
+    function metric(x, z) { return Math.sqrt(Math.sqrt(x * x * x * x + z * z * z * z)); }
+    function segD(px, pz, ax, az, bx, bz) { var dx = bx - ax, dz = bz - az;
+      var t = ((px - ax) * dx + (pz - az) * dz) / (dx * dx + dz * dz); t = Math.max(0, Math.min(1, t));
+      var x = ax + dx * t - px, z = az + dz * t - pz; return Math.sqrt(x * x + z * z); }
+    function laneEdge(x, z, mainOnly) { var m = 1e9;
+      for (var i = 0; i < SEGS.length; i++) { var g = SEGS[i]; if (mainOnly && !g[5]) continue;
+        m = Math.min(m, segD(x, z, g[0], g[1], g[2], g[3]) - g[4]); }
+      return m; }
+    function baseD(x, z) { return Math.min(Math.hypot(x - BASES[0][0], z - BASES[0][1]), Math.hypot(x - BASES[1][0], z - BASES[1][1])); }
+    function clearD(x, z) { var m = 1e9; for (var i = 0; i < CLEARINGS.length; i++) { var c = CLEARINGS[i]; m = Math.min(m, Math.hypot(x - c[0], z - c[1]) - c[2]); } return m; }
+    function clearF(x, z) { return 1 - sstep(-1.5, 0.5, clearD(x, z)); }
+    function free(x, z, pad) { return laneEdge(x, z) > pad && Math.hypot(x, z) > PLAZA + 5 && baseD(x, z) > BASE_R + 5 && clearD(x, z) > 2.5; }
+
+    function heightAt(x, z) {
+      var ax = Math.abs(x), az = Math.abs(z), m = metric(x, z), pf = 1 - sstep(-1.2, 0.9, laneEdge(x, z)),
+          pl = 1 - sstep(PLAZA - 1.5, PLAZA + 0.5, Math.hypot(x, z)), bs = 1 - sstep(BASE_R - 1.5, BASE_R + 0.5, baseD(x, z)),
+          flat = Math.max(pf, pl, bs, clearF(x, z)), ramp = sstep(A, A + 24, m);
+      return (fbm(ax * 0.07 + 11, az * 0.07 - 5) - 0.5) * 2.6 * (1 - flat) + pl * 0.35 + bs * 0.25 +
+        ramp * (7 + fbm(ax * 0.05 - 3, az * 0.05 + 8) * 9 + (vnoise(ax * 0.3, az * 0.3) - 0.5) * 2);
+    }
+
+    /* ---------- Terrain ---------- */
+    var dc = document.createElement("canvas"); dc.width = dc.height = 128;
+    var dx = dc.getContext("2d"), id = dx.createImageData(128, 128);
+    for (var q = 0; q < id.data.length; q += 4) { var v = 205 + rnd() * 50 | 0; id.data[q] = id.data[q + 1] = id.data[q + 2] = v; id.data[q + 3] = 255; }
+    dx.putImageData(id, 0, 0);
+    var detailTex = new THREE.CanvasTexture(dc);
+    detailTex.wrapS = detailTex.wrapT = THREE.RepeatWrapping; detailTex.repeat.set(90, 90);
+    detailTex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+
+    var groundGeo = new THREE.PlaneGeometry(280, 280, coarse ? 120 : 160, coarse ? 120 : 160);
+    groundGeo.rotateX(-Math.PI / 2);
+    var gp = groundGeo.attributes.position, cols = new Float32Array(gp.count * 3);
+    var C = function (h) { return new THREE.Color(h); };
+    var cG1 = C(0x3b7a38), cG2 = C(0x68a548), cG3 = C(0x2c5c30), cD1 = C(0x9a7a50), cD2 = C(0x76593a),
+        cS1 = C(0x858a92), cS2 = C(0x626870), cRock = C(0x595e58), cMoss = C(0x26482c), cBlue = C(0x4a78c8), cRed = C(0xc84a4a), c = new THREE.Color(), t2 = new THREE.Color();
+    for (var i = 0; i < gp.count; i++) {
+      var x = gp.getX(i), z = gp.getZ(i);
+      gp.setY(i, heightAt(x, z));
+      var ax = Math.abs(x), az = Math.abs(z), m = metric(x, z), n = fbm(ax * 0.12, az * 0.12), n2 = vnoise(ax * 0.6, az * 0.6);
+      var pe = laneEdge(x, z), pm = laneEdge(x, z, true), pf = 1 - sstep(-1.2, 0.9, pe), pl = 1 - sstep(PLAZA - 1.5, PLAZA + 0.5, Math.hypot(x, z));
+      var bs = 1 - sstep(BASE_R - 1.5, BASE_R + 0.5, baseD(x, z)), cl = clearF(x, z);
+      var band = sstep(A - 3.5, A - 2, m) * (1 - sstep(A - 0.5, A + 1.2, m)), sl = sstep(A + 1, A + 14, m);
+      var jf = sstep(3, 9, pe) * (1 - sstep(A - 8, A - 3, m));
+      c.copy(cG1).lerp(cG2, n).lerp(cG3, (1 - n2) * 0.35).lerp(cG3, jf * 0.4);         // grass, darker in the jungle
+      c.lerp(t2.copy(cD1).lerp(cD2, n2), pf * 0.95);                                    // dirt paths
+      c.lerp(t2.copy(cD1).multiplyScalar(1.2), (1 - sstep(-2.4, -0.8, pm)) * 0.55 * pf); // worn lane centre
+      c.lerp(cS2, sstep(-1.3, -0.4, pm) * (1 - sstep(-0.4, 0.5, pm)) * 0.55);          // stone lane curb
+      c.lerp(t2.copy(cD2).lerp(cG3, 0.5), cl * 0.85);                                   // jungle clearings
+      c.lerp(t2.copy(cS1).lerp(cS2, n2), pl);                                           // centre plaza
+      c.lerp(t2.copy(cS2).lerp(z > 0 ? cBlue : cRed, 0.4), bs * 0.9);                   // team bases
+      c.lerp(cS1, band * 0.8);
+      c.lerp(t2.copy(cRock).lerp(cMoss, n), sl * 0.9);
+      c.multiplyScalar(1 - 0.3 * sstep(A - 4, A, m) * (1 - sstep(A, A + 3, m)));
+      cols[i * 3] = c.r; cols[i * 3 + 1] = c.g; cols[i * 3 + 2] = c.b;
+    }
+    groundGeo.setAttribute("color", new THREE.BufferAttribute(cols, 3));
+    groundGeo.computeVertexNormals();
+    var ground = new THREE.Mesh(groundGeo, new THREE.MeshStandardMaterial({ vertexColors: true, map: detailTex, roughness: 1, metalness: 0 }));
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    /* ---------- Procedural prop geometry ---------- */
+    function M(x, y, z, sx, sy, sz, ry) {
+      return new THREE.Matrix4().compose(new THREE.Vector3(x, y, z),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(0, ry || 0, 0)), new THREE.Vector3(sx, sy, sz));
+    }
+    function merge(parts) {
+      var P = [], N = [], K = [];
+      parts.forEach(function (p) {
+        var g = p.g.clone(); g.applyMatrix4(p.m); if (g.index) g = g.toNonIndexed();
+        var pa = g.attributes.position.array, na = g.attributes.normal.array, k = new THREE.Color(p.c);
+        for (var i = 0; i < pa.length; i += 3) { P.push(pa[i], pa[i + 1], pa[i + 2]); N.push(na[i], na[i + 1], na[i + 2]); K.push(k.r, k.g, k.b); }
+      });
+      var r = new THREE.BufferGeometry();
+      r.setAttribute("position", new THREE.Float32BufferAttribute(P, 3));
+      r.setAttribute("normal", new THREE.Float32BufferAttribute(N, 3));
+      r.setAttribute("color", new THREE.Float32BufferAttribute(K, 3));
+      return r;
+    }
+    function rockGeo(g) { var p = g.attributes.position;
+      for (var i = 0; i < p.count; i++) { var f = 0.8 + 0.4 * hash(p.getX(i) * 7.3 + p.getY(i) * 3.1, p.getZ(i) * 5.7); p.setXYZ(i, p.getX(i) * f, p.getY(i) * f, p.getZ(i) * f); }
+      g.computeVertexNormals(); return g; }
+
+    var I = M(0, 0, 0, 1, 1, 1);
+    var pineG = merge([
+      { g: new THREE.CylinderGeometry(0.25, 0.35, 1.6, 6), m: M(0, 0.8, 0, 1, 1, 1), c: 0x5a3d26 },
+      { g: new THREE.ConeGeometry(1.7, 2.4, 7), m: M(0, 2.5, 0, 1, 1, 1), c: 0x2a6538 },
+      { g: new THREE.ConeGeometry(1.3, 2.2, 7), m: M(0, 3.8, 0, 1, 1, 1), c: 0x347640 },
+      { g: new THREE.ConeGeometry(0.9, 2.0, 7), m: M(0, 5.0, 0, 1, 1, 1), c: 0x3f8647 }]);
+    var oakG = merge([
+      { g: new THREE.CylinderGeometry(0.3, 0.42, 2.2, 6), m: M(0, 1.1, 0, 1, 1, 1), c: 0x5e4129 },
+      { g: new THREE.IcosahedronGeometry(1.7, 1), m: M(0, 3.3, 0, 1, 0.85, 1), c: 0x4b9742 },
+      { g: new THREE.IcosahedronGeometry(1.1, 1), m: M(0.9, 4.1, 0.3, 1, 0.9, 1), c: 0x62ad4a }]);
+    var bushG = merge([
+      { g: new THREE.IcosahedronGeometry(0.8, 1), m: M(0, 0.45, 0, 1, 0.7, 1), c: 0x3d8839 },
+      { g: new THREE.IcosahedronGeometry(0.55, 1), m: M(0.6, 0.35, 0.2, 1, 0.7, 1), c: 0x58a04a }]);
+    var rockG = merge([{ g: rockGeo(new THREE.IcosahedronGeometry(1, 1)), m: M(0, 0.45, 0, 1.2, 0.8, 1, 0), c: 0x7b8087 }]);
+    var tuftG = merge([0, 1, 2].map(function (k) {
+      return { g: new THREE.ConeGeometry(0.1, 0.8, 4), m: M(Math.cos(k * 2.1) * 0.12, 0.4, Math.sin(k * 2.1) * 0.12, 1, 1, 1), c: 0x78b84e }; }));
+    var flowerG = merge([{ g: new THREE.IcosahedronGeometry(0.13, 0), m: M(0, 0.3, 0, 1, 1, 1), c: 0xffffff }]);
+    var stoneG = merge([{ g: new THREE.BoxGeometry(1.1, 3.6, 0.9), m: M(0, 1.8, 0, 1, 1, 1), c: 0x6f747c }]);
+    var crystalG = merge([
+      { g: new THREE.OctahedronGeometry(0.7, 0), m: M(0, 1.4, 0, 1, 2.2, 1), c: 0xffffff },
+      { g: new THREE.OctahedronGeometry(0.45, 0), m: M(0.7, 0.8, 0.2, 1, 2, 1, 0.6), c: 0xffffff },
+      { g: new THREE.OctahedronGeometry(0.4, 0), m: M(-0.6, 0.7, -0.3, 1, 1.9, 1, 1.2), c: 0xffffff }]);
+
+    var propMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true });
+    var crystalMat = new THREE.MeshStandardMaterial({ color: 0xa8dcff, emissive: 0x4a8cff, emissiveIntensity: 0.9, roughness: 0.25, flatShading: true });
+
+    function inst(geo, mat, pts, shadow, tint) {
+      var im = new THREE.InstancedMesh(geo, mat, pts.length), d = new THREE.Object3D(), k = new THREE.Color();
+      pts.forEach(function (p, i) {
+        d.position.set(p.x, p.y, p.z); d.rotation.set(0, p.r, 0); d.scale.set(p.sx, p.sy, p.sx); d.updateMatrix();
+        im.setMatrixAt(i, d.matrix); if (tint) im.setColorAt(i, tint(k, p));
+      });
+      im.castShadow = shadow; im.receiveShadow = true; im.frustumCulled = false;
+      scene.add(im); return im;
+    }
+    function scatter(n, minM, maxM, ok, sc) {
+      var out = [], tries = 0, h = Math.ceil(n / 2);
+      while (out.length < h && tries < h * 40) { tries++;
+        var x = (rnd() * 2 - 1) * maxM, z = (rnd() * 2 - 1) * maxM, m = metric(x, z);
+        if (m < minM || m > maxM || !ok(x, z, m)) continue;
+        var s = sc[0] + rnd() * (sc[1] - sc[0]);
+        out.push({ x: x, y: heightAt(x, z), z: z, r: rnd() * 6.28, sx: s, sy: s * (0.9 + rnd() * 0.3) }); }
+      for (var k = 0, len = out.length; k < len; k++) { var p = out[k]; // 180° mirror keeps the map fair
+        out.push({ x: -p.x, y: heightAt(-p.x, -p.z), z: -p.z, r: p.r + Math.PI, sx: p.sx, sy: p.sy }); }
+      return out;
+    }
+    var decals = [];
+    function addDecals(pts, rad) { pts.forEach(function (p) { if (metric(p.x, p.z) < A + 6) decals.push({ x: p.x, y: p.y + 0.06, z: p.z, r: 0, sx: p.sx * rad, sy: 1 }); }); }
+    var greens = function (k, p) { return k.setScalar(0.85 + hash(p.x, p.z) * 0.3); };
+
+    /* ---------- Vegetation and rocks ---------- */
+    var outer = scatter(coarse ? 150 : 240, A - 2, 100, function (x, z, m) { return m > A - 2 && baseD(x, z) > 9; }, [0.9, 1.6]);
+    var jOK = function (x, z) { return free(x, z, 2.6); };
+    var pines = outer.concat(scatter(coarse ? 70 : 120, 10, A - 3, jOK, [0.8, 1.4]));
+    var oaks = scatter(coarse ? 60 : 100, 10, A - 3, jOK, [0.8, 1.3]);
+    var bushes = scatter(coarse ? 170 : 280, 8, A + 10, function (x, z) { return free(x, z, 2.2); }, [0.8, 1.5]);
+    var rocks = scatter(60, 10, A + 12, function (x, z) { return free(x, z, 3); }, [0.8, 2]);
+    var pebbles = scatter(140, 6, A - 4, function (x, z) { var e = laneEdge(x, z); return e > 0.8 && e < 2.6 && Math.hypot(x, z) > PLAZA + 1 && baseD(x, z) > BASE_R + 1 && clearD(x, z) > 0.5; }, [0.18, 0.4]);
+    var campRocks = [];
+    CLEARINGS.forEach(function (c) { for (var k = 0; k < 7; k++) { var a = k / 7 * 6.283 + c[0], px = c[0] + Math.cos(a) * c[2] * 0.95, pz = c[1] + Math.sin(a) * c[2] * 0.95, sz = 0.6 + hash(px, pz) * 0.5;
+      campRocks.push({ x: px, y: heightAt(px, pz) - 0.05, z: pz, r: a, sx: sz, sy: sz }); } });
+    var tufts = scatter(coarse ? 450 : 750, 4, A - 2, function (x, z) { return laneEdge(x, z) > 1.4 && Math.hypot(x, z) > PLAZA && clearD(x, z) > 0.5; }, [0.7, 1.3]);
+    var flowers = scatter(170, 6, A - 3, function (x, z) { return free(x, z, 2.5); }, [0.8, 1.4]);
+    var palette = [0xffe27a, 0xf4f0ff, 0xff9ec4, 0x9ecbff];
+    inst(pineG, propMat, pines, true, greens);
+    inst(oakG, propMat, oaks, true, greens);
+    inst(bushG, propMat, bushes, true, greens);
+    inst(rockG, propMat, rocks.concat(pebbles, campRocks), true, function (k, p) { return k.setScalar(0.8 + hash(p.z, p.x) * 0.35); });
+    inst(tuftG, propMat, tufts, false, greens);
+    inst(flowerG, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7 }), flowers, false,
+      function (k, p) { return k.setHex(palette[Math.floor(hash(p.x, p.z * 1.7) * 4)]); });
+    addDecals(pines, 2.0); addDecals(oaks, 2.4); addDecals(bushes, 1.9); addDecals(rocks, 2.2); addDecals(campRocks, 1.8);
+    var campRingG = new THREE.RingGeometry(0.62, 0.7, 40); campRingG.rotateX(-Math.PI / 2);
+    var campRingM = new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.5, depthWrite: false });
+    CLEARINGS.forEach(function (c) { var rm = new THREE.Mesh(campRingG, campRingM); rm.position.set(c[0], heightAt(c[0], c[1]) + 0.1, c[1]); rm.scale.setScalar(c[2] * 0.9); scene.add(rm); });
+
+    /* ---------- Arena boundary: boulder ring ---------- */
+    var ring = [];
+    for (var b = 0; b < 52; b++) {
+      var ang = b / 52 * Math.PI * 2, dxr = Math.cos(ang), dzr = Math.sin(ang), k2 = (A - 1) / metric(dxr, dzr);
+      var bx = dxr * k2 + (rnd() - 0.5) * 1.5, bz = dzr * k2 + (rnd() - 0.5) * 1.5;
+      if (baseD(bx, bz) < 14) continue;
+      var bsz = 1.3 + rnd() * 1.1; ring.push({ x: bx, y: heightAt(bx, bz) - 0.2, z: bz, r: rnd() * 6.28, sx: bsz, sy: bsz * 0.9 });
+    }
+    inst(rockG, propMat, ring, true, function (k) { return k.setScalar(0.85); });
+    addDecals(ring, 2.2);
+
+    /* ---------- Central landmark: rune circle, standing stones, crystals ---------- */
+    var py = heightAt(0, 0) + 0.08;
+    function rune(cx, cz, r1, r2, color) {
+      var g = new THREE.RingGeometry(r1, r2, 72); g.rotateX(-Math.PI / 2);
+      var mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.8, depthWrite: false }));
+      mesh.position.set(cx, heightAt(cx, cz) + 0.1, cz); scene.add(mesh); return mesh;
+    }
+    var runes = [rune(0, 0, 6.3, 6.7, 0x7fe0ff), rune(0, 0, 3.0, 3.2, 0x7fe0ff),
+      rune(0, 44, 10.2, 10.6, 0x5aa8ff), rune(0, -44, 10.2, 10.6, 0xff6a6a)];
+    var stones = [];
+    for (var s = 0; s < 8; s++) { var a2 = s / 8 * Math.PI * 2 + 0.2; stones.push({ x: Math.cos(a2) * 8.2, y: py - 0.1, z: Math.sin(a2) * 8.2, r: -a2 + Math.PI / 2, sx: 1, sy: 1 }); }
+    inst(stoneG, propMat, stones, true);
+    addDecals(stones, 1.6);
+    var cr = [{ x: 0, y: py, z: 0, r: 0.3, sx: 2.4, sy: 2.4 }];
+    [[12, 12], [-12, -12], [13, -9], [-13, 9]].forEach(function (p) { cr.push({ x: p[0], y: heightAt(p[0], p[1]), z: p[1], r: rnd() * 6, sx: 1, sy: 1 }); });
+    var jc = scatter(10, 18, A - 6, function (x, z) { return free(x, z, 7); }, [0.8, 1.4]);
+    cr = cr.concat(jc);
+    inst(crystalG, crystalMat, cr, true);
+    var glow = new THREE.PointLight(0x6aa8ff, 1.1, 40); glow.position.set(0, 4, 0); scene.add(glow);
+
+    /* ---------- Team bases: blue (+z) and red (-z) ---------- */
+    [{ z: 1, main: 0x3f7fe0, dark: 0x1d3f7a, glow: 0x4aa0ff }, { z: -1, main: 0xe04a4a, dark: 0x7a1f1f, glow: 0xff5a4a }].forEach(function (T) {
+      var gMat = new THREE.MeshStandardMaterial({ color: T.glow, emissive: T.glow, emissiveIntensity: 0.9, roughness: 0.3, flatShading: true });
+      var daisG = merge([
+        { g: new THREE.CylinderGeometry(4.2, 4.8, 0.6, 8), m: M(0, 0.3, 0, 1, 1, 1), c: 0x70757d },
+        { g: new THREE.CylinderGeometry(3.0, 3.4, 0.6, 8), m: M(0, 0.9, 0, 1, 1, 1), c: T.dark }]);
+      var pillarG = merge([
+        { g: new THREE.BoxGeometry(1.4, 5, 1.4), m: M(0, 2.5, 0, 1, 1, 1), c: 0x6f747c },
+        { g: new THREE.BoxGeometry(1.7, 0.5, 1.7), m: M(0, 3.4, 0, 1, 1, 1), c: T.main },
+        { g: new THREE.ConeGeometry(1.1, 1.5, 4), m: M(0, 5.75, 0, 1, 1, 1), c: T.main }]);
+      var nz = T.z * 50, dy = heightAt(0, nz);
+      inst(daisG, propMat, [{ x: 0, y: dy, z: nz, r: 0, sx: 1, sy: 1 }], true);
+      inst(crystalG, gMat, [{ x: 0, y: dy + 1.2, z: nz, r: 0.4, sx: 2.6, sy: 2.6 }, { x: -4.6, y: dy, z: nz - T.z * 2.5, r: 1, sx: 1.4, sy: 1.4 }, { x: 4.6, y: dy, z: nz - T.z * 2.5, r: 2, sx: 1.4, sy: 1.4 }], true);
+      var pil = [[9, 49], [-9, 49], [14, 47], [-14, 47]].map(function (q) { var pz = q[1] * T.z; return { x: q[0], y: heightAt(q[0], pz), z: pz, r: 0, sx: 1, sy: 1 }; });
+      inst(pillarG, propMat, pil, true); addDecals(pil, 1.6);
+      var pad = new THREE.Mesh(new THREE.CircleGeometry(4, 36).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: T.glow, transparent: true, opacity: 0.28, depthWrite: false }));
+      pad.position.set(0, heightAt(0, T.z * 44) + 0.09, T.z * 44); scene.add(pad);   // spawn area
+      rune(0, T.z * 44, 4.0, 4.3, T.glow);
+      var bl = new THREE.PointLight(T.glow, 0.9, 34); bl.position.set(0, 5, T.z * 48); scene.add(bl);
+    });
+
+    /* ---------- Soft contact shadows (ambient-occlusion look) ---------- */
+    var sc = document.createElement("canvas"); sc.width = sc.height = 64;
+    var sx2 = sc.getContext("2d"), grad = sx2.createRadialGradient(32, 32, 2, 32, 32, 32);
+    grad.addColorStop(0, "rgba(0,0,0,0.55)"); grad.addColorStop(1, "rgba(0,0,0,0)");
+    sx2.fillStyle = grad; sx2.fillRect(0, 0, 64, 64);
+    var decalG = new THREE.PlaneGeometry(1, 1); decalG.rotateX(-Math.PI / 2);
+    var decalM = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(sc), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+    inst(decalG, decalM, decals, false);
+
+    /* ---------- Fireflies ---------- */
+    var FF = coarse ? 70 : 140, ffPos = new Float32Array(FF * 3), ffBase = [];
+    for (var f = 0; f < FF; f++) {
+      var fx = (rnd() * 2 - 1) * A, fz = (rnd() * 2 - 1) * A;
+      ffBase.push({ x: fx, z: fz, y: heightAt(fx, fz) + 0.8 + rnd() * 3.5, ph: rnd() * 6.28 });
+    }
+    var ffGeo = new THREE.BufferGeometry(); ffGeo.setAttribute("position", new THREE.BufferAttribute(ffPos, 3));
+    var flies = new THREE.Points(ffGeo, new THREE.PointsMaterial({ color: 0xc8ffd8, size: 0.4, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending }));
+    flies.frustumCulled = false; scene.add(flies);
+
+    /* ---------- Resize handling ---------- */
+    function onResize() {
+      var w = window.innerWidth, h = window.innerHeight;
+      camera.aspect = w / h; camera.updateProjectionMatrix(); fitCamera();
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2));
+      renderer.setSize(w, h);
+    }
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    onResize();
+
+    /* ---------- Render loop ---------- */
+    var clock = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      var t = clock.getElapsedTime();
+      for (var i = 0; i < FF; i++) { var p = ffBase[i];
+        ffPos[i * 3] = p.x + Math.sin(t * 0.4 + p.ph) * 1.5;
+        ffPos[i * 3 + 1] = p.y + Math.sin(t * 0.8 + p.ph * 2) * 0.5;
+        ffPos[i * 3 + 2] = p.z + Math.cos(t * 0.35 + p.ph) * 1.5; }
+      ffGeo.attributes.position.needsUpdate = true;
+      crystalMat.emissiveIntensity = 0.85 + 0.2 * Math.sin(t * 1.5);
+      runes[0].material.opacity = 0.7 + 0.15 * Math.sin(t * 1.5);
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    /* ---------- Initialization complete ---------- */
+    requestAnimationFrame(function () { loadingEl.classList.add("hidden"); });
+  } catch (err) {
+    console.error(err);
+    fail("Your browser could not start the 3D engine. WebGL may be unavailable.");
+  }
+})();
+</script>
+</body>
+</html>
